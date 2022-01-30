@@ -3,6 +3,7 @@
 
 import asyncio
 import collections
+import time
 
 from .connection import connect
 from .utils import _PoolContextManager, _PoolConnectionContextManager
@@ -49,6 +50,9 @@ class Pool(asyncio.AbstractServer):
         self._closing = False
         self._closed = False
         self._echo = echo
+        self.fill_time = 0
+        self.fill_tries = 0
+        self.fill_acquire = 0
 
     @property
     def echo(self):
@@ -121,12 +125,20 @@ class Pool(asyncio.AbstractServer):
             raise RuntimeError("Cannot acquire connection after closing pool")
         with (await self._cond):
             while True:
+                self.fill_tries += 1
+                start_time = time.time_ns()
                 await self._fill_free_pool(True)
+                self.fill_acquire = 0
+                end_time = time.time_ns()
+                self.fill_time += (end_time - start_time)/10**9
+                start_time = end_time
                 if self._free:
                     conn = self._free.popleft()
                     assert not conn.closed, conn
                     assert conn not in self._used, (conn, self._used)
                     self._used.add(conn)
+                    end_time = time.time_ns()
+                    self.acquire += (end_time - start_time)/10**9
                     return conn
                 else:
                     await self._cond.wait()
