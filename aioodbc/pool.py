@@ -8,6 +8,7 @@ import collections
 import warnings
 from types import TracebackType
 from typing import Any, Deque, Optional, Set, Type
+import time
 
 from pyodbc import ProgrammingError
 
@@ -53,6 +54,9 @@ class Pool:
         self._closing = False
         self._closed = False
         self._echo = echo
+        self.fill_time = 0
+        self.fill_tries = 0
+        self.fill_acquire = 0
 
     @property
     def echo(self) -> bool:
@@ -126,12 +130,20 @@ class Pool:
             raise RuntimeError("Cannot acquire connection after closing pool")
         async with self._cond:
             while True:
+                self.fill_tries += 1
+                start_time = time.time_ns()
                 await self._fill_free_pool(True)
+                self.fill_acquire = 0
+                end_time = time.time_ns()
+                self.fill_time += (end_time - start_time)/10**9
+                start_time = end_time
                 if self._free:
                     conn = self._free.popleft()
                     assert not conn.closed, conn
                     assert conn not in self._used, (conn, self._used)
                     self._used.add(conn)
+                    end_time = time.time_ns()
+                    self.acquire += (end_time - start_time)/10**9
                     return conn
                 else:
                     await self._cond.wait()
