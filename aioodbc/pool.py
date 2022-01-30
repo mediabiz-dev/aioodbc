@@ -133,7 +133,6 @@ class Pool:
                 self.fill_tries += 1
                 start_time = time.time_ns()
                 await self._fill_free_pool(True)
-                self.fill_acquire = 0
                 end_time = time.time_ns()
                 self.fill_time += (end_time - start_time)/10**9
                 start_time = end_time
@@ -143,7 +142,7 @@ class Pool:
                     assert conn not in self._used, (conn, self._used)
                     self._used.add(conn)
                     end_time = time.time_ns()
-                    self.acquire += (end_time - start_time)/10**9
+                    self.fill_acquire += (end_time - start_time)/10**9
                     return conn
                 else:
                     await self._cond.wait()
