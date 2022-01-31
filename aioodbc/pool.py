@@ -57,6 +57,7 @@ class Pool:
         self.fill_time = 0
         self.fill_tries = 0
         self.fill_acquire = 0
+        self.lock_time = 0
 
     @property
     def echo(self) -> bool:
@@ -130,8 +131,6 @@ class Pool:
             raise RuntimeError("Cannot acquire connection after closing pool")
         async with self._cond:
             while True:
-                self.fill_tries += 1
-                start_time = time.time_ns()
                 await self._fill_free_pool(True)
                 end_time = time.time_ns()
                 self.fill_time += (end_time - start_time)/10**9
@@ -146,6 +145,10 @@ class Pool:
                     return conn
                 else:
                     await self._cond.wait()
+                    end_time = time.time_ns()
+                    self.lock_time += (end_time - start_time)/10**9
+                    start_time = end_time
+                    self.fill_tries += 1
 
     async def _fill_free_pool(self, override_min: bool) -> None:
         n, free = 0, len(self._free)
