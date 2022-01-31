@@ -118,7 +118,6 @@ class Pool:
         async with self._cond:
             while self.size > self.freesize:
                 await self._cond.wait()
-
         self._closed = True
 
     def acquire(self) -> _ContextManager[Connection]:
@@ -183,7 +182,7 @@ class Pool:
                 )
                 # raise exception if pool is closing
                 self._free.append(conn)
-                self._cond.notify()
+                self._cond.set()
             finally:
                 self._acquiring -= 1
         if self._free:
@@ -199,7 +198,7 @@ class Pool:
                 )
                 # raise exception if pool is closing
                 self._free.append(conn)
-                self._cond.notify()
+                self._cond.set()
             finally:
                 self._acquiring -= 1
 
