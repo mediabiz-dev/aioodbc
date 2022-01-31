@@ -26,8 +26,7 @@ async def _create_pool(minsize=10, maxsize=10, echo=False, loop=None,
     pool = Pool(minsize=minsize, maxsize=maxsize, echo=echo, loop=loop,
                 pool_recycle=pool_recycle, **kwargs)
     if minsize > 0:
-        with (await pool._cond):
-            await pool._fill_free_pool(False)
+        await pool._fill_free_pool(False)
     return pool
 
 
