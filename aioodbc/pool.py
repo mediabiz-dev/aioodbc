@@ -83,7 +83,6 @@ class Pool(asyncio.AbstractServer):
         while self._free:
             conn = self._free.popleft()
             await conn.close()
-        self._cond.set()
 
     def close(self):
         """Close pool.
@@ -122,12 +121,8 @@ class Pool(asyncio.AbstractServer):
     async def _acquire(self):
         if self._closing:
             raise RuntimeError("Cannot acquire connection after closing pool")
+        start_time = time.time_ns()
         while True:
-            start_time = time.time_ns()
-            await self._fill_free_pool(True)
-            end_time = time.time_ns()
-            self.fill_time += (end_time - start_time)/10**9
-            start_time = end_time
             if self._free:
                 conn = self._free.popleft()
                 assert not conn.closed, conn
@@ -137,6 +132,10 @@ class Pool(asyncio.AbstractServer):
                 self.fill_acquire += (end_time - start_time)/10**9
                 return conn
             else:
+                await self._fill_free_pool(True)
+                end_time = time.time_ns()
+                self.fill_time += (end_time - start_time)/10**9
+                start_time = end_time
                 await self._cond.wait()
                 self._cond.clear()
                 end_time = time.time_ns()
@@ -180,9 +179,6 @@ class Pool(asyncio.AbstractServer):
             finally:
                 self._acquiring -= 1
 
-    async def _wakeup(self):
-        self._cond.set()
-
     async def release(self, conn):
         """Release free connection back to the connection pool.
         """
@@ -193,7 +189,7 @@ class Pool(asyncio.AbstractServer):
                 await conn.close()
             else:
                 self._free.append(conn)
-            await self._wakeup()
+                self._cond.set()
 
     async def __aenter__(self):
         return self
