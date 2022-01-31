@@ -45,7 +45,7 @@ class Pool(asyncio.AbstractServer):
         self._acquiring = 0
         self._recycle = pool_recycle
         self._free = collections.deque(maxlen=maxsize)
-        self._cond = asyncio.Condition(loop=loop)
+        self._cond = asyncio.Event()
         self._used = set()
         self._closing = False
         self._closed = False
@@ -81,11 +81,10 @@ class Pool(asyncio.AbstractServer):
 
     async def clear(self):
         """Close all free connections in pool."""
-        with (await self._cond):
-            while self._free:
-                conn = self._free.popleft()
-                await conn.close()
-            self._cond.notify()
+        while self._free:
+            conn = self._free.popleft()
+            await conn.close()
+        self._cond.set()
 
     def close(self):
         """Close pool.
@@ -110,9 +109,9 @@ class Pool(asyncio.AbstractServer):
             conn = self._free.popleft()
             await conn.close()
 
-        with (await self._cond):
-            while self.size > self.freesize:
-                await self._cond.wait()
+        while self.size > self.freesize:
+            await self._cond.wait()
+            self._cond.clear()
 
         self._closed = True
 
@@ -124,30 +123,27 @@ class Pool(asyncio.AbstractServer):
     async def _acquire(self):
         if self._closing:
             raise RuntimeError("Cannot acquire connection after closing pool")
-        start_time = time.time_ns()
-        with (await self._cond):
+        while True:
+            start_time = time.time_ns()
+            await self._fill_free_pool(True)
             end_time = time.time_ns()
-            self.lock_time += (end_time - start_time)/10**9
+            self.fill_time += (end_time - start_time)/10**9
             start_time = end_time
-            while True:
-                await self._fill_free_pool(True)
+            if self._free:
+                conn = self._free.popleft()
+                assert not conn.closed, conn
+                assert conn not in self._used, (conn, self._used)
+                self._used.add(conn)
                 end_time = time.time_ns()
-                self.fill_time += (end_time - start_time)/10**9
+                self.fill_acquire += (end_time - start_time)/10**9
+                return conn
+            else:
+                await self._cond.wait()
+                self._cond.clear()
+                end_time = time.time_ns()
+                self.lock_time += (end_time - start_time)/10**9
                 start_time = end_time
-                if self._free:
-                    conn = self._free.popleft()
-                    assert not conn.closed, conn
-                    assert conn not in self._used, (conn, self._used)
-                    self._used.add(conn)
-                    end_time = time.time_ns()
-                    self.fill_acquire += (end_time - start_time)/10**9
-                    return conn
-                else:
-                    await self._cond.wait()
-                    end_time = time.time_ns()
-                    self.lock_time += (end_time - start_time)/10**9
-                    start_time = end_time
-                    self.fill_tries += 1
+                self.fill_tries += 1
 
     async def _fill_free_pool(self, override_min):
         n, free = 0, len(self._free)
@@ -168,7 +164,7 @@ class Pool(asyncio.AbstractServer):
                                      **self._conn_kwargs)
                 # raise exception if pool is closing
                 self._free.append(conn)
-                self._cond.notify()
+                self._cond.set()
             finally:
                 self._acquiring -= 1
         if self._free:
@@ -181,13 +177,12 @@ class Pool(asyncio.AbstractServer):
                                      **self._conn_kwargs)
                 # raise exception if pool is closing
                 self._free.append(conn)
-                self._cond.notify()
+                self._cond.set()
             finally:
                 self._acquiring -= 1
 
     async def _wakeup(self):
-        with (await self._cond):
-            self._cond.notify()
+        self._cond.set()
 
     async def release(self, conn):
         """Release free connection back to the connection pool.
