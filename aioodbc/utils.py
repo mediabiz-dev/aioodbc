@@ -1,24 +1,32 @@
-import sys
-from collections.abc import Coroutine
+from types import TracebackType
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Dict,
+    Generator,
+    Generic,
+    Optional,
+    Type,
+    TypeVar,
+    Union,
+)
 
 from pyodbc import Error
-
-
-PY_352 = sys.version_info >= (3, 5, 2)
 
 # Issue #195.  Don't pollute the pool with bad conns
 # Unfortunately occasionally sqlite will return 'HY000' for invalid query,
 # so we need specialize the check
-_CONN_CLOSE_ERRORS = {
+_CONN_CLOSE_ERRORS: Dict[str, Union[str, None]] = {
     # [Microsoft][ODBC Driver 17 for SQL Server]Communication link failure
-    '08S01': None,
-
+    "08S01": None,
     # [HY000] server closed the connection unexpectedly
-    'HY000': '[HY000] server closed the connection unexpectedly',
+    "HY000": "[HY000] server closed the connection unexpectedly",
 }
 
 
-def _is_conn_close_error(e):
+def _is_conn_close_error(e: Exception) -> bool:
     if not isinstance(e, Error) or len(e.args) < 2:
         return False
 
@@ -30,87 +38,68 @@ def _is_conn_close_error(e):
     if not check_msg:
         return True
 
-    return msg.startswith(check_msg)
+    return str(msg).startswith(check_msg)
 
 
-class _ContextManager(Coroutine):
+_TObj = TypeVar("_TObj")
+_Release = Callable[[_TObj], Awaitable[None]]
 
-    __slots__ = ('_coro', '_obj')
 
-    def __init__(self, coro):
+class _ContextManager(Coroutine[Any, None, _TObj], Generic[_TObj]):
+    __slots__ = ("_coro", "_obj", "_release", "_release_on_exception")
+
+    def __init__(
+        self,
+        coro: Coroutine[Any, None, _TObj],
+        release: _Release[_TObj],
+        release_on_exception: Optional[_Release[_TObj]] = None,
+    ):
         self._coro = coro
-        self._obj = None
+        self._obj: Optional[_TObj] = None
+        self._release = release
+        self._release_on_exception = (
+            release if release_on_exception is None else release_on_exception
+        )
 
-    def send(self, value):
+    def send(self, value: Any) -> "Any":
         return self._coro.send(value)
 
-    def throw(self, typ, val=None, tb=None):
+    def throw(  # type: ignore
+        self,
+        typ: Type[BaseException],
+        val: Optional[Union[BaseException, object]] = None,
+        tb: Optional[TracebackType] = None,
+    ) -> Any:
         if val is None:
             return self._coro.throw(typ)
-        elif tb is None:
+        if tb is None:
             return self._coro.throw(typ, val)
-        else:
-            return self._coro.throw(typ, val, tb)
+        return self._coro.throw(typ, val, tb)
 
-    def close(self):
-        return self._coro.close()
+    def close(self) -> None:
+        self._coro.close()
 
-    @property
-    def gi_frame(self):
-        return self._coro.gi_frame
-
-    @property
-    def gi_running(self):
-        return self._coro.gi_running
-
-    @property
-    def gi_code(self):
-        return self._coro.gi_code
-
-    def __next__(self):
-        return self.send(None)
-
-    def __await__(self):
+    def __await__(self) -> Generator[Any, None, _TObj]:
         return self._coro.__await__()
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> _TObj:
         self._obj = await self._coro
+        assert self._obj
         return self._obj
 
-    async def __aexit__(self, exc_type, exc, tb):
-        if exc_type:
-            await self._obj.rollback()
-        elif not self._obj.autocommit:
-            await self._obj.commit()
-        await self._obj.close()
-        self._obj = None
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None:
+        if self._obj is None:
+            return
 
-
-class _PoolContextManager(_ContextManager):
-    async def __aexit__(self, exc_type, exc, tb):
-        self._obj.close()
-        await self._obj.wait_closed()
-        self._obj = None
-
-
-class _PoolConnectionContextManager(_ContextManager):
-
-    __slots__ = ('_coro', '_conn', '_pool')
-
-    def __init__(self, coro, pool):
-        self._coro = coro
-        self._conn = None
-        self._pool = pool
-
-    def __await__(self):
-        self._pool = None
-        return self._coro.__await__()
-
-    async def __aenter__(self):
-        self._conn = await self._coro
-        return self._conn
-
-    async def __aexit__(self, exc_type, exc, tb):
-        await self._pool.release(self._conn)
-        self._pool = None
-        self._conn = None
+        try:
+            if exc_type is not None:
+                await self._release_on_exception(self._obj)
+            else:
+                await self._release(self._obj)
+        finally:
+            self._obj = None

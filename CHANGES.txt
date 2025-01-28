@@ -1,5 +1,27 @@
 Changes
 -------
+0.5.0 (2023-10-28)
+^^^^^^^^^^^^^^^^^^
+* Added support for python 3.12
+* Bumped minimal supported version of pyodbc to 5.0.1
+* Dropped aiodocker related testing to unlock python 3.12
+
+0.4.1 (2023-10-28)
+^^^^^^^^^^^^^^^^^^
+* Implemented cursor setinputsizes.
+* Implemented cursor fetchval.
+* Added more type annotations.
+* Added autocommit setter for cusror.
+
+
+0.4.0 (2023-03-16)
+^^^^^^^^^^^^^^^^^^
+* Fixed compatibility with python 3.9+.
+* Removed usage of explicit loop parameter.
+* Added default read size parameter for cursor.
+* Updated tests and CI scripts.
+* Code base formatted with black.
+
 
 0.3.3 (2019-07-05)
 ^^^^^^^^^^^^^^^^^^

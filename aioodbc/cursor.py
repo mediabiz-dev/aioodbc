@@ -1,9 +1,9 @@
 import pyodbc
+
 from .log import logger
-from .utils import PY_352, _is_conn_close_error
+from .utils import _is_conn_close_error
 
-
-__all__ = ['Cursor']
+__all__ = ["Cursor"]
 
 
 class Cursor:
@@ -15,16 +15,16 @@ class Cursor:
     the other cursors.
     """
 
-    def __init__(self, pyodbc_cursor, connection, echo=False):
+    def __init__(self, pyodbc_cursor: pyodbc.Cursor, connection, echo=False):
         self._conn = connection
-        self._impl = pyodbc_cursor
+        self._impl: pyodbc.Cursor = pyodbc_cursor
         self._loop = connection.loop
-        self._echo = echo
+        self._echo: bool = echo
 
     async def _run_operation(self, func, *args, **kwargs):
         # execute func in thread pool of attached to cursor connection
         if not self._conn:
-            raise pyodbc.OperationalError('Cursor is closed.')
+            raise pyodbc.OperationalError("Cursor is closed.")
 
         try:
             result = await self._conn._execute(func, *args, **kwargs)
@@ -51,6 +51,10 @@ class Cursor:
         is False.
         """
         return self._conn.autocommit
+
+    @autocommit.setter
+    def autocommit(self, value):
+        self._conn.autocommit = value
 
     @property
     def rowcount(self):
@@ -141,9 +145,21 @@ class Cursor:
     def callproc(self, procname, args=()):
         raise NotImplementedError
 
-    async def setinputsizes(self, *args, **kwargs):
-        """Does nothing, required by DB API."""
-        return None
+    async def setinputsizes(self, sizes=None) -> None:
+        """Explicitly declare the types and sizes of the parameters in a query.
+        Set to None to clear any previously registered input sizes.
+
+        :param sizes: A list of tuples, one tuple for each query parameter,
+            where each tuple contains:
+                1. the column datatype
+                2. the column size (char length or decimal precision)
+                3. the decimal scale.
+
+            For example:
+                [(pyodbc.SQL_WVARCHAR, 50, 0), (pyodbc.SQL_DECIMAL, 18, 4)]
+        """
+        # sizes: Optional[Iterable[Tuple[int, int, int]]]
+        await self._run_operation(self._impl.setinputsizes, sizes)
 
     async def setoutputsize(self, *args, **kwargs):
         """Does nothing, required by DB API."""
@@ -157,6 +173,16 @@ class Cursor:
         statement).
         """
         fut = self._run_operation(self._impl.fetchone)
+        return fut
+
+    def fetchval(self):
+        """Returns the first column of the first row if there are results.
+
+        A ProgrammingError exception is raised if no SQL has been executed
+        or if it did not return a result set (e.g. was not a SELECT
+        statement).
+        """
+        fut = self._run_operation(self._impl.fetchval)
         return fut
 
     def fetchall(self):
@@ -173,7 +199,7 @@ class Cursor:
         fut = self._run_operation(self._impl.fetchall)
         return fut
 
-    def fetchmany(self, size):
+    def fetchmany(self, size=0):
         """Returns a list of remaining rows, containing no more than size
         rows, used to process results in chunks. The list will be empty when
         there are no more rows.
@@ -187,6 +213,8 @@ class Cursor:
 
         :param size: int, max number of rows to return
         """
+        if not size:
+            size = self.arraysize
         fut = self._run_operation(self._impl.fetchmany, size)
         return fut
 
@@ -240,36 +268,52 @@ class Cursor:
         :param quick: if True, CARDINALITY and PAGES are returned  only if
             they are readily available from the server
         """
-        fut = self._run_operation(self._impl.statistics, catalog=catalog,
-                                  schema=schema, unique=unique, quick=quick)
+        fut = self._run_operation(
+            self._impl.statistics,
+            catalog=catalog,
+            schema=schema,
+            unique=unique,
+            quick=quick,
+        )
         return fut
 
-    def rowIdColumns(self, table, catalog=None, schema=None,  # nopep8
-                     nullable=True):
+    def rowIdColumns(
+        self, table, catalog=None, schema=None, nullable=True  # nopep8
+    ):
         """Executes SQLSpecialColumns with SQL_BEST_ROWID which creates a
         result set of columns that uniquely identify a row
         """
-        fut = self._run_operation(self._impl.rowIdColumns, table,
-                                  catalog=catalog, schema=schema,
-                                  nullable=nullable)
+        fut = self._run_operation(
+            self._impl.rowIdColumns,
+            table,
+            catalog=catalog,
+            schema=schema,
+            nullable=nullable,
+        )
         return fut
 
-    def rowVerColumns(self, table, catalog=None, schema=None,  # nopep8
-                      nullable=True):
+    def rowVerColumns(
+        self, table, catalog=None, schema=None, nullable=True  # nopep8
+    ):
         """Executes SQLSpecialColumns with SQL_ROWVER which creates a
         result set of columns that are automatically updated when any
         value in the row is updated.
         """
-        fut = self._run_operation(self._impl.rowVerColumns, table,
-                                  catalog=catalog, schema=schema,
-                                  nullable=nullable)
+        fut = self._run_operation(
+            self._impl.rowVerColumns,
+            table,
+            catalog=catalog,
+            schema=schema,
+            nullable=nullable,
+        )
         return fut
 
     def primaryKeys(self, table, catalog=None, schema=None):  # nopep8
         """Creates a result set of column names that make up the primary key
         for a table by executing the SQLPrimaryKeys function."""
-        fut = self._run_operation(self._impl.primaryKeys, table,
-                                  catalog=catalog, schema=schema)
+        fut = self._run_operation(
+            self._impl.primaryKeys, table, catalog=catalog, schema=schema
+        )
         return fut
 
     def foreignKeys(self, *a, **kw):  # nopep8
@@ -313,12 +357,8 @@ class Cursor:
         fut = self._run_operation(self._impl.rollback)
         return fut
 
-    if PY_352:
-        def __aiter__(self):
-            return self
-    else:
-        async def __aiter__(self):
-            return self
+    def __aiter__(self):
+        return self
 
     async def __anext__(self):
         ret = await self.fetchone()
